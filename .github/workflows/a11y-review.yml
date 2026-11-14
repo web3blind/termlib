@@ -1,0 +1,27 @@
+name: TalkBack review regression
+on:
+  push:
+    branches: [ci/talkback-review]
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: zulu
+          java-version: '17'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: 'cmdline-tools;latest platform-tools'
+      - name: Reproduce recent-screen reading regression before its fix
+        run: ./gradlew :lib:testDebugUnitTest --tests org.connectbot.terminal.AccessibilityOverlayTest.readingRecentScreenRowsDoesNotFollowNewOutput --no-configuration-cache
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: review-regression-results
+          path: lib/build/test-results/
