@@ -42,6 +42,21 @@ class AccessibilityOverlayTest {
     val composeTestRule = createComposeRule()
 
     @Test
+    fun narrowingHistoryDoesNotDuplicateAccessibilityKeys() {
+        val emulator = TerminalEmulatorFactory.create(initialRows = 3, initialCols = 120) as TerminalEmulatorImpl
+        emulator.writeInput((1..12).joinToString("\r\n") { "$it " + "x".repeat(116) }.toByteArray())
+        emulator.processPendingUpdates()
+        emulator.resize(5, 20)
+        emulator.processPendingUpdates()
+        val snapshot = emulator.snapshot.value
+        val ids = snapshot.scrollback.map { it.accessibilityId }
+        assertEquals(ids.size, ids.distinct().size)
+        val state = TerminalScreenState(snapshot)
+        composeTestRule.setContent { AccessibilityOverlay(state, 24f, modifier = Modifier.fillMaxSize()) }
+        composeTestRule.waitForIdle()
+    }
+
+    @Test
     fun movingFromHistoryToRecentRowsDoesNotReenableFollowing() {
         val emulator = TerminalEmulatorFactory.create(initialRows = 3, initialCols = 40) as TerminalEmulatorImpl
         emulator.writeInput((1..30).joinToString("\r\n") { "Output $it" }.toByteArray())
