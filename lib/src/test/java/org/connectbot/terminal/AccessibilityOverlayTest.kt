@@ -16,10 +16,21 @@
  */
 package org.connectbot.terminal
 
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -28,6 +39,92 @@ import org.junit.runner.RunWith
 class AccessibilityOverlayTest {
     @get:Rule
     val composeTestRule = createComposeRule()
+
+    @Test
+    fun liveOutputFollowsTailAndExplicitReturnToBottomResyncs() {
+        val emulator = TerminalEmulatorFactory.create(initialRows = 3, initialCols = 40) as TerminalEmulatorImpl
+        emulator.writeInput("First".toByteArray())
+        emulator.processPendingUpdates()
+        val state = TerminalScreenState(emulator.snapshot.value)
+        val list = LazyListState()
+        composeTestRule.setContent {
+            AccessibilityOverlay(state, 24f, lazyListState = list, modifier = Modifier.height(72.dp).testTag("history"))
+        }
+        composeTestRule.waitForIdle()
+        composeTestRule.runOnIdle {
+            emulator.writeInput((1..20).joinToString("\r\n", prefix = "\r\n") { "Tail $it" }.toByteArray())
+            emulator.processPendingUpdates()
+            state.updateSnapshot(emulator.snapshot.value)
+        }
+        composeTestRule.onNodeWithText("Tail 20", substring = true).assertIsDisplayed()
+        composeTestRule.runOnIdle { state.scrollBy(10) }
+        composeTestRule.waitForIdle()
+        composeTestRule.runOnIdle { state.scrollToBottom() }
+        composeTestRule.onNodeWithText("Tail 20", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun historyAnchorSurvivesScrollbackEviction() {
+        val emulator = TerminalEmulatorFactory.create(initialRows = 3, initialCols = 40) as TerminalEmulatorImpl
+        emulator.writeInput((1..1030).joinToString("\r\n") { "Row $it" }.toByteArray())
+        emulator.processPendingUpdates()
+        val state = TerminalScreenState(emulator.snapshot.value)
+        val list = LazyListState()
+        composeTestRule.setContent {
+            AccessibilityOverlay(state, 24f, lazyListState = list, modifier = Modifier.height(72.dp).testTag("history"))
+        }
+        composeTestRule.onNodeWithTag("history").performScrollToIndex(100)
+        var anchor = ""
+        composeTestRule.runOnIdle {
+            anchor = state.snapshot.scrollback[list.firstVisibleItemIndex].text
+            emulator.writeInput((1031..1040).joinToString("\r\n", prefix = "\r\n") { "Row $it" }.toByteArray())
+            emulator.processPendingUpdates()
+            state.updateSnapshot(emulator.snapshot.value)
+        }
+        composeTestRule.runOnIdle {
+            assertEquals(anchor, state.snapshot.scrollback[list.firstVisibleItemIndex].text)
+        }
+    }
+
+    @Test
+    fun carriageReturnRedrawKeepsTheSemanticNode() {
+        val emulator = TerminalEmulatorFactory.create(initialRows = 3, initialCols = 20) as TerminalEmulatorImpl
+        emulator.writeInput("Before".toByteArray())
+        emulator.processPendingUpdates()
+        val state = TerminalScreenState(emulator.snapshot.value)
+        composeTestRule.setContent { AccessibilityOverlay(state, 24f, modifier = Modifier.fillMaxSize()) }
+        val id = composeTestRule.onNodeWithText("Before", substring = true).fetchSemanticsNode().id
+        composeTestRule.runOnIdle {
+            emulator.writeInput("\rChange".toByteArray())
+            emulator.processPendingUpdates()
+            state.updateSnapshot(emulator.snapshot.value)
+        }
+        assertEquals(id, composeTestRule.onNodeWithText("Change", substring = true).fetchSemanticsNode().id)
+    }
+
+    @Test
+    fun historySupportsAccessibilityScrolling() {
+        val emulator = TerminalEmulatorFactory.create(initialRows = 3, initialCols = 20)
+        emulator.writeInput((1..30).joinToString("\r\n") { if (it == 1) "Oldest row" else "History $it" }.toByteArray())
+        (emulator as TerminalEmulatorImpl).processPendingUpdates()
+        composeTestRule.setContent {
+            AccessibilityOverlay(
+                screenState = rememberTerminalScreenState(emulator),
+                charHeight = 24f,
+                modifier = androidx.compose.ui.Modifier
+                    .fillMaxSize()
+                    .testTag("history"),
+            )
+        }
+        composeTestRule.onNodeWithTag("history").assert(
+            androidx.compose.ui.test.SemanticsMatcher.keyIsDefined(
+                androidx.compose.ui.semantics.SemanticsActions.ScrollBy,
+            ),
+        )
+        composeTestRule.onNodeWithText("History 30", substring = true).assertExists()
+        composeTestRule.onNodeWithTag("history").performScrollToIndex(0)
+        composeTestRule.onNodeWithText("Oldest row", substring = true).assertExists()
+    }
 
     @Test
     fun testAccessibilityOverlayExposesLines() {
